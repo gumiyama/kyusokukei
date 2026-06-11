@@ -98,3 +98,41 @@ from ball_speed_calculator import calculate_speed
 # speed_data = calculate_speed(start_frame, end_frame, video_fps, known_distance_meters)
 # print(f"Speed in m/s: {speed_data['mps']}")
 ```
+
+## Real-Time Measurement (Experimental)
+
+An additional script `real_time_ball_speed.py` allows measuring ball speed from a live camera feed using OpenCV. The script tracks a colored ball as it crosses two on-screen lines and calculates the speed between those points.
+
+Run the script (ensure `opencv-python` is installed and a camera is connected). You can optionally save the session to a video file for evidence:
+
+```bash
+python real_time_ball_speed.py --distance 18.44 --output capture.mp4
+```
+
+Press `ESC` to exit. Adjust the HSV color range and distance values in the script for your environment.
+
+### Personal Records
+
+You can keep track of personal best speeds by specifying a player name. The best
+speed for each player is stored in `personal_records.json` (or a custom path via
+`--record-file`):
+
+```bash
+python real_time_ball_speed.py --distance 18.44 --player Alice --output capture.mp4
+```
+
+The script will indicate whether a new record was set.
+
+### Spin Rate
+
+If you place a distinct colored marker on the ball, the script can estimate spin
+rate in rotations per minute (RPM). Provide HSV ranges for the marker using
+`--marker-lower` and `--marker-upper`:
+
+```bash
+python real_time_ball_speed.py --distance 18.44 \
+    --marker-lower 0,150,150 --marker-upper 10,255,255
+```
+
+The RPM value is printed along with the speed after the throw.
+

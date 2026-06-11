@@ -52,6 +52,47 @@ def calculate_speed(start_frame: int, end_frame: int, video_fps: float, known_di
 
     return {"mps": speed_mps, "kmh": speed_kmh}
 
+
+def calculate_spin_rpm(angles_deg: list[float], time_seconds: float) -> float:
+    """Calculate spin rate in RPM from a sequence of orientation angles.
+
+    The angle list represents the orientation of a marker on the ball in degrees
+    for each video frame. The function unwraps the angles to determine the total
+    amount of rotation and converts that to revolutions per minute.
+
+    Args:
+        angles_deg: Sequence of marker angles in degrees.
+        time_seconds: Duration covered by ``angles_deg`` in seconds.
+
+    Returns:
+        The spin rate in rotations per minute (RPM).
+
+    Raises:
+        ValueError: If ``time_seconds`` is not greater than 0 or fewer than two
+            angles are provided.
+    """
+
+    if time_seconds <= 0:
+        raise ValueError("time_seconds must be greater than 0")
+    if len(angles_deg) < 2:
+        raise ValueError("at least two angle samples are required")
+
+    total_change = 0.0
+    prev = angles_deg[0]
+    for angle in angles_deg[1:]:
+        delta = angle - prev
+        # unwrap to [-180, 180]
+        if delta > 180:
+            delta -= 360
+        elif delta < -180:
+            delta += 360
+        total_change += delta
+        prev = angle
+
+    rotations = abs(total_change) / 360.0
+    rpm = rotations / time_seconds * 60.0
+    return rpm
+
 if __name__ == "__main__":
     # Example usage
     start_frame_example = 10
