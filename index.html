@@ -285,9 +285,9 @@
       <span>m</span>
     </div>
     <div class="presets">
-      <button data-d="18.44" class="active">硬式・軟式</button>
-      <button data-d="16">少年野球</button>
-      <button data-d="13.11">ソフト</button>
+      <button data-d="18.44" data-ball="hard" class="active">硬式・軟式</button>
+      <button data-d="16" data-ball="junior">少年野球</button>
+      <button data-d="13.11" data-ball="soft">ソフト</button>
     </div>
 
     <button id="startBtn">📹 カメラで計測スタート</button>
@@ -357,6 +357,25 @@
   const SOUND_SPEED = 343;     // 音速 m/s(捕球音の到達遅れ補正)
   const BEHIND_MIN_FLIGHT = 0.18, BEHIND_MAX_FLIGHT = 2.0;
 
+  // ---- 初速換算 ----
+  // スタジアムのスピードガンは「リリース直後の初速」を表示する。本アプリの計測値は
+  // 区間平均速度なので、空気抵抗モデル v(x) = v0·e^(-kx) で初速に換算して表示する。
+  // 平均速度 v_avg = D·k·v0/(e^(kD)-1) より v0 = v_avg·(e^(kD)-1)/(kD)
+  // k = ρ·Cd·A/(2m)  (ρ=1.225kg/m³, Cd≈0.35, A=断面積, m=ボール質量)
+  const BALL_K = {
+    hard: 0.00622,   // 硬式 145g / 直径73.2mm
+    rubber: 0.00632, // 軟式M号 138g / 直径72mm
+    junior: 0.00619, // 軟式J号 129.5g / 直径69mm
+    soft: 0.00826    // ソフト3号 187.5g / 直径96.5mm
+  };
+  let ballK = BALL_K.hard;
+
+  // 平均速度(km/h)→初速(km/h)
+  function toInitialSpeed(avgKmh, distM) {
+    const kd = ballK * distM;
+    return avgKmh * (Math.exp(kd) - 1) / kd;
+  }
+
   let mode = 'side';           // 'side' | 'behind'
   let micReady = false;        // マイク検出が使えるか
   let audioCtx = null;
@@ -376,6 +395,7 @@
   document.querySelectorAll('.presets button').forEach(b => {
     b.addEventListener('click', () => {
       document.getElementById('distance').value = b.dataset.d;
+      ballK = BALL_K[b.dataset.ball] || BALL_K.hard;
       document.querySelectorAll('.presets button').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
     });
@@ -689,15 +709,18 @@
     state = 'cooldown';
     cooldownUntil = t + COOLDOWN;
 
-    const prevMax = records.length ? Math.max(...records) : 0;
-    records.push(kmh);
+    // 区間平均速度→リリース初速に換算(スタジアム表示と同じ基準にする)
+    const v0 = Math.round(toInitialSpeed(kmh, dist) * 10) / 10;
 
-    document.getElementById('speedValue').textContent = kmh.toFixed(1);
-    document.getElementById('speedComment').textContent = comment(kmh);
+    const prevMax = records.length ? Math.max(...records) : 0;
+    records.push(v0);
+
+    document.getElementById('speedValue').textContent = v0.toFixed(1);
+    document.getElementById('speedComment').textContent = comment(v0);
     document.getElementById('speedSub').textContent =
-      `飛行時間 ${elapsed.toFixed(3)}秒 / ${dist}m / ${method}`;
+      `初速換算 / 平均 ${kmh.toFixed(1)}km/h / 飛行 ${elapsed.toFixed(3)}秒 / ${dist}m / ${method}`;
     document.getElementById('bestNote').textContent =
-      (records.length > 1 && kmh > prevMax) ? '👑 自己ベスト更新!' : '';
+      (records.length > 1 && v0 > prevMax) ? '👑 自己ベスト更新!' : '';
     const flash = document.getElementById('speedFlash');
     flash.classList.add('show');
     setTimeout(() => flash.classList.remove('show'), 2300);
