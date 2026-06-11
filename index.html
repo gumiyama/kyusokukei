@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>みんなのスピードガン</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Hiragino Kaku Gothic ProN", "Helvetica Neue", sans-serif;
+    background: #0a0f1e;
+    color: #e8e8e8;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ---- スタート画面 ---- */
+  #startScreen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    background: linear-gradient(160deg, #0a0f1e 0%, #16213e 100%);
+  }
+  #startScreen h1 { font-size: 1.6rem; color: #7fd4ff; letter-spacing: 0.1em; margin-bottom: 6px; }
+  #startScreen .tagline { font-size: 0.85rem; color: #8899bb; margin-bottom: 32px; }
+  .distance-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .distance-row input {
+    width: 90px; font-size: 1.3rem; text-align: center; padding: 10px 4px;
+    border-radius: 10px; border: 1px solid #555; background: #1c2742; color: #fff;
+  }
+  .presets { display: flex; gap: 8px; margin-bottom: 36px; }
+  .presets button {
+    font-size: 0.85rem; padding: 10px 14px; border-radius: 10px;
+    border: 1px solid #3a4a72; background: #1c2742; color: #bcd; cursor: pointer;
+  }
+  .presets button.active { background: #2e5aac; color: #fff; border-color: #5a8ae0; }
+  #startBtn {
+    width: 100%; max-width: 340px; padding: 20px; font-size: 1.3rem; font-weight: bold;
+    color: #fff; background: linear-gradient(180deg, #2e7d32, #1b5e20);
+    border: none; border-radius: 16px; cursor: pointer;
+    box-shadow: 0 6px 0 #0d3f12;
+  }
+  #startBtn:active { transform: translateY(3px); box-shadow: 0 3px 0 #0d3f12; }
+  .start-hint { margin-top: 20px; font-size: 0.75rem; color: #8899bb; line-height: 1.8; }
+
+  /* ---- 計測画面 ---- */
+  #measureScreen { flex: 1; display: none; position: relative; background: #000; }
+  #measureScreen.active { display: block; }
+  #camera {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  .hud-top {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.65), transparent);
+  }
+  #stateLabel {
+    font-size: 0.95rem; font-weight: bold; letter-spacing: 0.1em;
+    padding: 6px 14px; border-radius: 999px;
+    background: rgba(46,125,50,0.85); color: #fff;
+  }
+  #stateLabel.detecting { background: rgba(239,108,0,0.9); }
+  #backBtn {
+    pointer-events: auto;
+    font-size: 0.85rem; padding: 8px 14px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.4); color: #fff;
+  }
+
+  .hud-bottom {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px);
+    background: linear-gradient(0deg, rgba(0,0,0,0.7), transparent);
+    text-align: center;
+  }
+  #guide { font-size: 0.8rem; color: #cdf; line-height: 1.6; text-shadow: 0 1px 3px #000; }
+
+  /* 速度の大表示 */
+  #speedFlash {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.78);
+    z-index: 10;
+  }
+  #speedFlash.show { display: flex; }
+  #speedFlash .speed {
+    font-family: "Courier New", monospace;
+    font-size: clamp(5rem, 24vw, 9rem);
+    font-weight: bold; color: #ff3b3b;
+    text-shadow: 0 0 30px rgba(255,59,59,0.7);
+    line-height: 1;
+  }
+  #speedFlash .unit { font-size: 1.4rem; color: #ff8080; letter-spacing: 0.3em; margin-top: 4px; }
+  #speedFlash .comment { margin-top: 14px; font-size: 1.2rem; color: #7fd4ff; }
+  #speedFlash .sub { margin-top: 8px; font-size: 0.8rem; color: #99a; font-family: monospace; }
+  #speedFlash .best-note { margin-top: 10px; font-size: 1rem; color: #ffd54f; }
+
+  .session-stats {
+    position: absolute; top: calc(env(safe-area-inset-top, 0px) + 56px); right: 10px;
+    font-family: monospace; font-size: 0.78rem; color: #fff;
+    background: rgba(0,0,0,0.45); border-radius: 10px; padding: 8px 12px;
+    text-align: right; line-height: 1.7;
+  }
+  .session-stats b { color: #ffd54f; }
+
+  #errMsg {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center; text-align: center;
+    padding: 30px; color: #faa; font-size: 0.9rem; line-height: 1.8;
+    background: rgba(0,0,0,0.85); z-index: 20;
+  }
+</style>
+</head>
+<body>
+
+  <!-- スタート画面 -->
+  <div id="startScreen">
+    <h1>⚾ みんなのスピードガン</h1>
+    <div class="tagline">スマホをかまえるだけ。誰でも球速が測れる。</div>
+
+    <div class="distance-row">
+      <span>距離</span>
+      <input type="number" id="distance" value="18.44" step="0.01" min="1">
+      <span>m</span>
+    </div>
+    <div class="presets">
+      <button data-d="18.44" class="active">硬式・軟式</button>
+      <button data-d="16">少年野球</button>
+      <button data-d="13.11">ソフト</button>
+    </div>
+
+    <button id="startBtn">📹 カメラで計測スタート</button>
+
+    <div class="start-hint">
+      投げる人と捕る人の<b>真横・中間あたり</b>から、<br>
+      ボールの軌道全体が画面に入るようにかまえてね。<br>
+      画面の<b>左の線→右の線</b>をボールが通ると自動で計測!
+    </div>
+  </div>
+
+  <!-- 計測画面 -->
+  <div id="measureScreen">
+    <video id="camera" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+
+    <div class="hud-top">
+      <button id="backBtn">← 戻る</button>
+      <div id="stateLabel">READY</div>
+      <div style="width:60px"></div>
+    </div>
+
+    <div class="session-stats" id="sessionStats" style="display:none">
+      最速 <b id="maxSpeed">-</b> km/h<br>
+      計測 <span id="count">0</span> 回
+    </div>
+
+    <div class="hud-bottom">
+      <div id="guide">左の線にリリースポイント、右の線に捕る位置を合わせてね(左右どちら向きでもOK)</div>
+    </div>
+
+    <div id="speedFlash">
+      <div class="speed" id="speedValue">---</div>
+      <div class="unit">km/h</div>
+      <div class="comment" id="speedComment"></div>
+      <div class="sub" id="speedSub"></div>
+      <div class="best-note" id="bestNote"></div>
+    </div>
+
+    <div id="errMsg"></div>
+  </div>
+
+<script>
+(() => {
+  const video = document.getElementById('camera');
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d');
+  const stateLabel = document.getElementById('stateLabel');
+  const guide = document.getElementById('guide');
+
+  // 解析用の縮小キャンバス(処理を軽くするため低解像度で差分をとる)
+  const W = 160, H = 90;
+  const proc = document.createElement('canvas');
+  proc.width = W; proc.height = H;
+  const pctx = proc.getContext('2d', { willReadFrequently: true });
+
+  // トリガーライン位置(解析キャンバス上のX座標、画面比率)
+  const LINE_A = 0.18, LINE_B = 0.82;  // 左線・右線
+  const BAND = 4;                       // ラインの判定幅(px on proc canvas)
+  const MOTION_THRESH = 40;             // ピクセル差分のしきい値
+  const MIN_PIXELS = 3;                 // 動体とみなす最小ピクセル数
+  const MAX_FLIGHT = 3.0;               // これ以上かかったら無効(秒)
+  const MIN_FLIGHT = 0.08;              // これ以下は誤検出(秒)
+  const COOLDOWN = 2.5;                 // 計測後の待ち(秒)
+
+  let prevFrame = null;
+  let state = 'idle';        // idle | armed | detecting | cooldown
+  let firstLine = null;      // 'A' or 'B' どちらを先に通ったか
+  let t0 = 0;
+  let cooldownUntil = 0;
+  let records = [];
+  let stream = null;
+  let running = false;
+
+  // ---- 画面遷移 ----
+  document.querySelectorAll('.presets button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.getElementById('distance').value = b.dataset.d;
+      document.querySelectorAll('.presets button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+
+  document.getElementById('startBtn').addEventListener('click', startCamera);
+  document.getElementById('backBtn').addEventListener('click', stopCamera);
+
+  async function startCamera() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          frameRate: { ideal: 60 }   // 対応端末では60fpsで精度アップ
+        },
+        audio: false
+      });
+    } catch (e) {
+      showError('カメラを使えませんでした。\nブラウザのカメラ許可を確認してね。\n(' + e.name + ')');
+      document.getElementById('startScreen').style.display = 'none';
+      document.getElementById('measureScreen').classList.add('active');
+      return;
+    }
+    video.srcObject = stream;
+    document.getElementById('startScreen').style.display = 'none';
+    document.getElementById('measureScreen').classList.add('active');
+    state = 'armed';
+    prevFrame = null;
+    running = true;
+    video.addEventListener('loadedmetadata', () => {
+      resizeOverlay();
+      loop();
+    }, { once: true });
+  }
+
+  function stopCamera() {
+    running = false;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    document.getElementById('measureScreen').classList.remove('active');
+    document.getElementById('startScreen').style.display = 'flex';
+    document.getElementById('speedFlash').classList.remove('show');
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('errMsg');
+    el.textContent = msg;
+    el.style.display = 'flex';
+    setTimeout(() => { el.style.display = 'none'; stopCamera(); }, 4000);
+  }
+
+  function resizeOverlay() {
+    overlay.width = overlay.clientWidth * devicePixelRatio;
+    overlay.height = overlay.clientHeight * devicePixelRatio;
+  }
+  window.addEventListener('resize', resizeOverlay);
+
+  // ---- メインループ:フレーム差分でライン横断を検出 ----
+  const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+  function loop() {
+    if (!running) return;
+    if (useRVFC) {
+      video.requestVideoFrameCallback((now, meta) => {
+        processFrame(meta.mediaTime);
+        loop();
+      });
+    } else {
+      requestAnimationFrame((now) => {
+        processFrame(now / 1000);
+        loop();
+      });
+    }
+  }
+
+  function processFrame(t) {
+    pctx.drawImage(video, 0, 0, W, H);
+    const frame = pctx.getImageData(0, 0, W, H).data;
+
+    if (prevFrame) {
+      const motionA = bandMotion(frame, prevFrame, Math.round(W * LINE_A));
+      const motionB = bandMotion(frame, prevFrame, Math.round(W * LINE_B));
+
+      if (state === 'cooldown' && t >= cooldownUntil) {
+        state = 'armed';
+      }
+
+      if (state === 'armed') {
+        if (motionA >= MIN_PIXELS && motionB >= MIN_PIXELS) {
+          // 両方同時はカメラ揺れなどの全体ノイズ → 無視
+        } else if (motionA >= MIN_PIXELS) {
+          state = 'detecting'; firstLine = 'A'; t0 = t;
+        } else if (motionB >= MIN_PIXELS) {
+          state = 'detecting'; firstLine = 'B'; t0 = t;
+        }
+      } else if (state === 'detecting') {
+        const elapsed = t - t0;
+        if (elapsed > MAX_FLIGHT) {
+          state = 'armed';  // タイムアウト → 仕切り直し
+        } else {
+          const hit = (firstLine === 'A') ? motionB : motionA;
+          if (hit >= MIN_PIXELS && elapsed >= MIN_FLIGHT) {
+            onMeasured(elapsed, t);
+          }
+        }
+      }
+    }
+    prevFrame = frame;
+    drawOverlay();
+  }
+
+  // 縦ライン付近の帯で、前フレームとの輝度差分が大きいピクセル数を数える
+  function bandMotion(cur, prev, cx) {
+    let count = 0;
+    const x0 = Math.max(0, cx - BAND), x1 = Math.min(W - 1, cx + BAND);
+    for (let y = 0; y < H; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = (y * W + x) * 4;
+        const lc = cur[i] * 0.3 + cur[i+1] * 0.59 + cur[i+2] * 0.11;
+        const lp = prev[i] * 0.3 + prev[i+1] * 0.59 + prev[i+2] * 0.11;
+        if (Math.abs(lc - lp) > MOTION_THRESH) count++;
+      }
+    }
+    return count;
+  }
+
+  function onMeasured(elapsed, t) {
+    const dist = parseFloat(document.getElementById('distance').value) || 18.44;
+    const kmh = Math.round((dist / elapsed) * 3.6 * 10) / 10;
+
+    // 非現実的な値は誤検出として捨てる
+    if (kmh < 20 || kmh > 200) { state = 'armed'; return; }
+
+    state = 'cooldown';
+    cooldownUntil = t + COOLDOWN;
+
+    const prevMax = records.length ? Math.max(...records) : 0;
+    records.push(kmh);
+
+    document.getElementById('speedValue').textContent = kmh.toFixed(1);
+    document.getElementById('speedComment').textContent = comment(kmh);
+    document.getElementById('speedSub').textContent =
+      `飛行時間 ${elapsed.toFixed(3)}秒 / ${dist}m`;
+    document.getElementById('bestNote').textContent =
+      (records.length > 1 && kmh > prevMax) ? '👑 自己ベスト更新!' : '';
+    const flash = document.getElementById('speedFlash');
+    flash.classList.add('show');
+    setTimeout(() => flash.classList.remove('show'), 2300);
+
+    document.getElementById('sessionStats').style.display = 'block';
+    document.getElementById('maxSpeed').textContent = Math.max(...records).toFixed(1);
+    document.getElementById('count').textContent = records.length;
+
+    if (navigator.vibrate) navigator.vibrate(80);
+  }
+
+  function comment(kmh) {
+    if (kmh >= 150) return '🔥 プロ級ストレート!!';
+    if (kmh >= 130) return '⚡ 剛速球!';
+    if (kmh >= 110) return '💪 いい球いってる!';
+    if (kmh >= 90) return '👍 ナイスボール!';
+    if (kmh >= 60) return '🙂 まずまず!';
+    return '🐢 スローボール?';
+  }
+
+  function drawOverlay() {
+    const w = overlay.width, h = overlay.height;
+    octx.clearRect(0, 0, w, h);
+
+    // トリガーライン2本
+    for (const lx of [LINE_A, LINE_B]) {
+      const x = lx * w;
+      octx.strokeStyle = (state === 'detecting') ? 'rgba(255,160,0,0.9)' : 'rgba(127,212,255,0.8)';
+      octx.lineWidth = 3 * devicePixelRatio;
+      octx.setLineDash([14 * devicePixelRatio, 10 * devicePixelRatio]);
+      octx.beginPath();
+      octx.moveTo(x, h * 0.08);
+      octx.lineTo(x, h * 0.92);
+      octx.stroke();
+    }
+    octx.setLineDash([]);
+
+    // 状態表示
+    if (state === 'detecting') {
+      stateLabel.textContent = '⚾ 計測中…';
+      stateLabel.classList.add('detecting');
+      guide.textContent = 'ボールを追跡中!';
+    } else if (state === 'cooldown') {
+      stateLabel.textContent = '次の投球まで少し待ってね';
+      stateLabel.classList.remove('detecting');
+    } else {
+      stateLabel.textContent = '● READY — 投げてOK!';
+      stateLabel.classList.remove('detecting');
+      guide.textContent = '左の線にリリースポイント、右の線に捕る位置を合わせてね';
+    }
+  }
+})();
+</script>
+</body>
+</html>
