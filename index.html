@@ -22,19 +22,50 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 24px;
+    justify-content: flex-start;
+    padding: 20px 20px 32px;
     text-align: center;
     background: linear-gradient(160deg, #0a0f1e 0%, #16213e 100%);
+    overflow-y: auto;
   }
-  #startScreen h1 { font-size: 1.6rem; color: #7fd4ff; letter-spacing: 0.1em; margin-bottom: 6px; }
-  #startScreen .tagline { font-size: 0.85rem; color: #8899bb; margin-bottom: 32px; }
-  .distance-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  #startScreen h1 { font-size: 1.5rem; color: #7fd4ff; letter-spacing: 0.1em; margin-bottom: 4px; margin-top: 8px; }
+  #startScreen .tagline { font-size: 0.82rem; color: #8899bb; margin-bottom: 18px; }
+
+  /* セットアップ図解 */
+  .setup-diagram {
+    width: 100%; max-width: 360px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid #2a3a5a;
+    border-radius: 14px;
+    padding: 14px 12px 12px;
+    margin-bottom: 18px;
+  }
+  .setup-diagram .diagram-title {
+    font-size: 0.72rem; color: #7fd4ff; letter-spacing: 0.1em; margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+  .diagram-svg { width: 100%; }
+  .setup-steps {
+    display: flex; flex-direction: column; gap: 8px; margin-top: 12px; text-align: left;
+  }
+  .setup-step {
+    display: flex; align-items: flex-start; gap: 10px;
+    font-size: 0.82rem; color: #cde; line-height: 1.5;
+  }
+  .setup-step .num {
+    flex-shrink: 0;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #2e5aac; color: #fff;
+    font-size: 0.72rem; font-weight: bold;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .distance-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .distance-row input {
     width: 90px; font-size: 1.3rem; text-align: center; padding: 10px 4px;
     border-radius: 10px; border: 1px solid #555; background: #1c2742; color: #fff;
   }
-  .presets { display: flex; gap: 8px; margin-bottom: 36px; }
+  .presets { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
   .presets button {
     font-size: 0.85rem; padding: 10px 14px; border-radius: 10px;
     border: 1px solid #3a4a72; background: #1c2742; color: #bcd; cursor: pointer;
@@ -129,6 +160,65 @@
     <h1>⚾ みんなのスピードガン</h1>
     <div class="tagline">スマホをかまえるだけ。誰でも球速が測れる。</div>
 
+    <!-- カメラの構え方 図解 -->
+    <div class="setup-diagram">
+      <div class="diagram-title">📐 カメラの構え方</div>
+      <!-- 上から見た図 -->
+      <svg class="diagram-svg" viewBox="0 0 320 130" xmlns="http://www.w3.org/2000/svg">
+        <!-- 地面ライン -->
+        <line x1="30" y1="80" x2="290" y2="80" stroke="#3a4a72" stroke-width="1.5" stroke-dasharray="4,4"/>
+
+        <!-- ピッチャー -->
+        <circle cx="50" cy="65" r="14" fill="#2e5aac" opacity="0.9"/>
+        <text x="50" y="70" text-anchor="middle" font-size="18" fill="white">🤾</text>
+        <text x="50" y="97" text-anchor="middle" font-size="10" fill="#8899bb">投手</text>
+
+        <!-- キャッチャー -->
+        <circle cx="270" cy="65" r="14" fill="#1b5e20" opacity="0.9"/>
+        <text x="270" y="70" text-anchor="middle" font-size="18" fill="white">🧤</text>
+        <text x="270" y="97" text-anchor="middle" font-size="10" fill="#8899bb">捕手</text>
+
+        <!-- ボールの軌道 -->
+        <line x1="64" y1="65" x2="256" y2="65" stroke="#ffd54f" stroke-width="2" stroke-dasharray="6,3"/>
+        <polygon points="258,61 268,65 258,69" fill="#ffd54f"/>
+        <circle cx="140" cy="65" r="7" fill="#ffd54f" opacity="0.9"/>
+        <text x="140" y="69" text-anchor="middle" font-size="9" fill="#1a1a1a">●</text>
+
+        <!-- 撮影者 (真横) -->
+        <circle cx="160" cy="118" r="13" fill="#c62828" opacity="0.9"/>
+        <text x="160" y="123" text-anchor="middle" font-size="16" fill="white">📱</text>
+        <text x="160" y="112" text-anchor="middle" font-size="9" fill="#ff8a80">あなた</text>
+
+        <!-- 撮影者からの矢印 -->
+        <line x1="160" y1="104" x2="160" y2="82" stroke="#ff8a80" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <polygon points="156,83 160,74 164,83" fill="#ff8a80"/>
+
+        <!-- 距離ラベル -->
+        <line x1="64" y1="55" x2="256" y2="55" stroke="#3a4a72" stroke-width="1"/>
+        <line x1="64" y1="50" x2="64" y2="60" stroke="#3a4a72" stroke-width="1"/>
+        <line x1="256" y1="50" x2="256" y2="60" stroke="#3a4a72" stroke-width="1"/>
+        <text x="160" y="51" text-anchor="middle" font-size="9" fill="#7fd4ff">← 投球距離 →</text>
+
+        <!-- 「真横」ラベル -->
+        <text x="190" y="118" text-anchor="start" font-size="9" fill="#ff8a80">← 真横・中間に立つ</text>
+      </svg>
+
+      <div class="setup-steps">
+        <div class="setup-step">
+          <div class="num">1</div>
+          <div>投手と捕手の<b>真横・ちょうど中間</b>に立つ。ボールが横切るのが見える位置。</div>
+        </div>
+        <div class="setup-step">
+          <div class="num">2</div>
+          <div>スマホを<b>横向き</b>に持ち、ボールの軌道全体が画面に入るようにかまえる。</div>
+        </div>
+        <div class="setup-step">
+          <div class="num">3</div>
+          <div>画面に表示される<b>2本の点線</b>の間をボールが通ると自動で球速を計測!</div>
+        </div>
+      </div>
+    </div>
+
     <div class="distance-row">
       <span>距離</span>
       <input type="number" id="distance" value="18.44" step="0.01" min="1">
@@ -141,12 +231,6 @@
     </div>
 
     <button id="startBtn">📹 カメラで計測スタート</button>
-
-    <div class="start-hint">
-      投げる人と捕る人の<b>真横・中間あたり</b>から、<br>
-      ボールの軌道全体が画面に入るようにかまえてね。<br>
-      画面の<b>左の線→右の線</b>をボールが通ると自動で計測!
-    </div>
   </div>
 
   <!-- 計測画面 -->
