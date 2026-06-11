@@ -60,6 +60,16 @@
     display: flex; align-items: center; justify-content: center;
   }
 
+  /* 撮影モード切り替え */
+  .mode-row { display: flex; gap: 10px; margin-bottom: 16px; width: 100%; max-width: 360px; }
+  .mode-row button {
+    flex: 1; padding: 12px 8px; border-radius: 12px;
+    border: 1px solid #3a4a72; background: #1c2742; color: #bcd;
+    cursor: pointer; font-size: 0.85rem; line-height: 1.5;
+  }
+  .mode-row button.active { background: #2e5aac; color: #fff; border-color: #5a8ae0; }
+  .mode-row b { display: block; font-size: 0.95rem; }
+
   .distance-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .distance-row input {
     width: 90px; font-size: 1.3rem; text-align: center; padding: 10px 4px;
@@ -160,9 +170,16 @@
     <h1>⚾ みんなのスピードガン</h1>
     <div class="tagline">スマホをかまえるだけ。誰でも球速が測れる。</div>
 
+    <!-- 撮影モード -->
+    <div class="mode-row">
+      <button id="modeSide" class="active"><b>📐 横から</b>高精度 ±1km/h</button>
+      <button id="modeBehind"><b>🎯 後ろから</b>スカウトモード</button>
+    </div>
+
     <!-- カメラの構え方 図解 -->
     <div class="setup-diagram">
-      <div class="diagram-title">📐 カメラの構え方</div>
+      <div class="diagram-title" id="diagramTitle">📐 カメラの構え方(横から)</div>
+      <div id="sideGuide">
       <!-- 上から見た図 -->
       <svg class="diagram-svg" viewBox="0 0 320 130" xmlns="http://www.w3.org/2000/svg">
         <!-- 地面ライン -->
@@ -217,6 +234,49 @@
           <div>画面に表示される<b>2本の点線</b>の間をボールが通ると自動で球速を計測!</div>
         </div>
       </div>
+      </div><!-- /sideGuide -->
+
+      <!-- 後ろからモードのガイド -->
+      <div id="behindGuide" style="display:none">
+      <svg class="diagram-svg" viewBox="0 0 320 130" xmlns="http://www.w3.org/2000/svg">
+        <!-- 地面ライン -->
+        <line x1="30" y1="95" x2="290" y2="95" stroke="#3a4a72" stroke-width="1.5" stroke-dasharray="4,4"/>
+        <!-- ピッチャー(遠く・小さい) -->
+        <circle cx="60" cy="60" r="11" fill="#2e5aac" opacity="0.9"/>
+        <text x="60" y="65" text-anchor="middle" font-size="14" fill="white">🤾</text>
+        <text x="60" y="112" text-anchor="middle" font-size="10" fill="#8899bb">投手</text>
+        <!-- キャッチャー(手前・大きい) -->
+        <circle cx="215" cy="68" r="16" fill="#1b5e20" opacity="0.9"/>
+        <text x="215" y="74" text-anchor="middle" font-size="20" fill="white">🧤</text>
+        <text x="215" y="112" text-anchor="middle" font-size="10" fill="#8899bb">捕手</text>
+        <!-- ボール軌道(投手→捕手) -->
+        <line x1="74" y1="62" x2="196" y2="67" stroke="#ffd54f" stroke-width="2" stroke-dasharray="6,3"/>
+        <polygon points="196,62 206,68 196,72" fill="#ffd54f"/>
+        <!-- 撮影者(捕手の後ろ) -->
+        <circle cx="278" cy="72" r="13" fill="#c62828" opacity="0.9"/>
+        <text x="278" y="77" text-anchor="middle" font-size="16" fill="white">📱</text>
+        <text x="278" y="50" text-anchor="middle" font-size="9" fill="#ff8a80">あなた</text>
+        <!-- 撮影方向の矢印 -->
+        <line x1="264" y1="70" x2="240" y2="69" stroke="#ff8a80" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <polygon points="241,65 232,69 241,73" fill="#ff8a80"/>
+        <!-- マイクの音 -->
+        <text x="240" y="46" text-anchor="middle" font-size="11" fill="#7fd4ff">🔊 パンッ!</text>
+      </svg>
+      <div class="setup-steps">
+        <div class="setup-step">
+          <div class="num">1</div>
+          <div><b>捕手の後ろ(バックネット裏など)</b>から、投手が画面中央の枠に入るようにかまえる。</div>
+        </div>
+        <div class="setup-step">
+          <div class="num">2</div>
+          <div><b>リリースの腕の振り</b>を自動検出。捕球は<b>ミットの音</b>をマイクで検出(許可してね)。</div>
+        </div>
+        <div class="setup-step">
+          <div class="num">3</div>
+          <div>マイクが使えないときは映像から捕球を検出(精度はやや落ちる)。静かな環境ほど正確!</div>
+        </div>
+      </div>
+      </div><!-- /behindGuide -->
     </div>
 
     <div class="distance-row">
@@ -289,6 +349,19 @@
 
   const MAX_GLOBAL_MOTION = W * H * 0.12; // 画面の12%以上が動いたらカメラ揺れとみなす
 
+  // ---- 後ろから(スカウト)モード用 ----
+  const PITCH_ZONE = { x0: 0.35, x1: 0.65, y0: 0.12, y1: 0.60 }; // 投手を入れる枠
+  const CATCH_ZONE = { x0: 0.20, x1: 0.80, y0: 0.72, y1: 0.98 }; // 映像フォールバック用の捕手エリア
+  const RELEASE_PIXELS = 18;   // リリース(腕の振り)とみなす動きピクセル数
+  const CATCH_PIXELS = 50;     // 映像で捕球とみなす動きピクセル数
+  const SOUND_SPEED = 343;     // 音速 m/s(捕球音の到達遅れ補正)
+  const BEHIND_MIN_FLIGHT = 0.18, BEHIND_MAX_FLIGHT = 2.0;
+
+  let mode = 'side';           // 'side' | 'behind'
+  let micReady = false;        // マイク検出が使えるか
+  let audioCtx = null;
+  let noiseFloor = 0.02;       // 環境音レベル(EMA)
+
   let prevFrame = null;
   let state = 'idle';        // idle | armed | detecting | cooldown
   let firstLine = null;      // 'A' or 'B' どちらを先に通ったか
@@ -308,10 +381,26 @@
     });
   });
 
+  // 撮影モード切り替え
+  const modeSideBtn = document.getElementById('modeSide');
+  const modeBehindBtn = document.getElementById('modeBehind');
+  function setMode(m) {
+    mode = m;
+    modeSideBtn.classList.toggle('active', m === 'side');
+    modeBehindBtn.classList.toggle('active', m === 'behind');
+    document.getElementById('sideGuide').style.display = (m === 'side') ? '' : 'none';
+    document.getElementById('behindGuide').style.display = (m === 'behind') ? '' : 'none';
+    document.getElementById('diagramTitle').textContent =
+      (m === 'side') ? '📐 カメラの構え方(横から)' : '🎯 カメラの構え方(後ろから)';
+  }
+  modeSideBtn.addEventListener('click', () => setMode('side'));
+  modeBehindBtn.addEventListener('click', () => setMode('behind'));
+
   document.getElementById('startBtn').addEventListener('click', startCamera);
   document.getElementById('backBtn').addEventListener('click', stopCamera);
 
   async function startCamera() {
+    const wantMic = (mode === 'behind');
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -319,14 +408,33 @@
           width: { ideal: 1280 },
           frameRate: { ideal: 60 }   // 対応端末では60fpsで精度アップ
         },
-        audio: false
+        audio: wantMic   // 後ろからモードは捕球音検出にマイクを使う
       });
     } catch (e) {
-      showError('カメラを使えませんでした。\nブラウザのカメラ許可を確認してね。\n(' + e.name + ')');
-      document.getElementById('startScreen').style.display = 'none';
-      document.getElementById('measureScreen').classList.add('active');
-      return;
+      if (wantMic && (e.name === 'NotAllowedError' || e.name === 'NotFoundError')) {
+        // マイク拒否 → 映像のみで再試行(捕球は映像フォールバック)
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1280 }, frameRate: { ideal: 60 } },
+            audio: false
+          });
+        } catch (e2) { return cameraFail(e2); }
+      } else {
+        return cameraFail(e);
+      }
     }
+    micReady = false;
+    if (wantMic && stream.getAudioTracks().length > 0) setupAudio(stream);
+    afterCameraStart();
+  }
+
+  function cameraFail(e) {
+    showError('カメラを使えませんでした。\nブラウザのカメラ許可を確認してね。\n(' + e.name + ')');
+    document.getElementById('startScreen').style.display = 'none';
+    document.getElementById('measureScreen').classList.add('active');
+  }
+
+  function afterCameraStart() {
     video.srcObject = stream;
     document.getElementById('startScreen').style.display = 'none';
     document.getElementById('measureScreen').classList.add('active');
@@ -339,10 +447,45 @@
     }, { once: true });
   }
 
+  // ---- マイク:捕球音(鋭いスパイク)の検出 ----
+  function setupAudio(stream) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaStreamSource(stream);
+      const proc = audioCtx.createScriptProcessor(1024, 1, 1);
+      src.connect(proc);
+      proc.connect(audioCtx.destination); // 接続しないと発火しないブラウザがある(音は出ない)
+      proc.onaudioprocess = (ev) => {
+        const buf = ev.inputBuffer.getChannelData(0);
+        let peak = 0, peakIdx = 0, sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const a = Math.abs(buf[i]);
+          sum += a;
+          if (a > peak) { peak = a; peakIdx = i; }
+        }
+        const avg = sum / buf.length;
+        // 環境音レベルをゆっくり学習(スパイク自体は学習に入れない)
+        if (peak < noiseFloor * 4) noiseFloor = noiseFloor * 0.95 + avg * 0.05;
+
+        if (mode === 'behind' && state === 'detecting' &&
+            peak > Math.max(0.10, noiseFloor * 6)) {
+          // バッファ先頭からピークまでの遅れを引いて、鳴った瞬間を復元
+          const tCatch = performance.now() / 1000 - (buf.length - peakIdx) / ev.inputBuffer.sampleRate;
+          onCatchDetected(tCatch, '🎙 ミット音');
+        }
+      };
+      micReady = true;
+    } catch (e) {
+      micReady = false; // 失敗時は映像フォールバックで続行
+    }
+  }
+
   function stopCamera() {
     running = false;
     if (stream) stream.getTracks().forEach(t => t.stop());
     stream = null;
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    micReady = false;
     document.getElementById('measureScreen').classList.remove('active');
     document.getElementById('startScreen').style.display = 'flex';
     document.getElementById('speedFlash').classList.remove('show');
@@ -383,7 +526,9 @@
     pctx.drawImage(video, 0, 0, W, H);
     const frame = pctx.getImageData(0, 0, W, H).data;
 
-    if (prevFrame) {
+    if (prevFrame && mode === 'behind') {
+      processBehind(frame, prevFrame);
+    } else if (prevFrame) {
       const motionA = bandMotion(frame, prevFrame, Math.round(W * LINE_A));
       const motionB = bandMotion(frame, prevFrame, Math.round(W * LINE_B));
       const blob = motionCentroid(frame, prevFrame);
@@ -422,6 +567,57 @@
     }
     prevFrame = frame;
     drawOverlay();
+  }
+
+  // ---- 後ろからモード:リリース(腕の振り)→捕球(音 or 映像)で飛行時間を測る ----
+  function processBehind(cur, prev) {
+    const now = performance.now() / 1000; // 音と同じ時計を使う
+    if (state === 'cooldown' && now >= cooldownUntil) state = 'armed';
+
+    if (state === 'armed') {
+      if (zoneMotion(cur, prev, PITCH_ZONE) >= RELEASE_PIXELS) {
+        state = 'detecting';
+        t0 = now;
+      }
+    } else if (state === 'detecting') {
+      const elapsed = now - t0;
+      if (elapsed > BEHIND_MAX_FLIGHT) {
+        state = 'armed'; // タイムアウト
+      } else if (!micReady && elapsed >= BEHIND_MIN_FLIGHT) {
+        // マイクが使えないときの映像フォールバック:捕手エリアの動きの急増
+        if (zoneMotion(cur, prev, CATCH_ZONE) >= CATCH_PIXELS) {
+          onCatchDetected(now, '🎥 映像検出');
+        }
+      }
+    }
+  }
+
+  // 指定ゾーン内の動体ピクセル数
+  function zoneMotion(cur, prev, z) {
+    const x0 = Math.round(W * z.x0), x1 = Math.round(W * z.x1);
+    const y0 = Math.round(H * z.y0), y1 = Math.round(H * z.y1);
+    let count = 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = (y * W + x) * 4;
+        const lc = cur[i] * 0.3 + cur[i+1] * 0.59 + cur[i+2] * 0.11;
+        const lp = prev[i] * 0.3 + prev[i+1] * 0.59 + prev[i+2] * 0.11;
+        if (Math.abs(lc - lp) > MOTION_THRESH) count++;
+      }
+    }
+    return count;
+  }
+
+  function onCatchDetected(tCatch, source) {
+    if (state !== 'detecting') return;
+    const dist = parseFloat(document.getElementById('distance').value) || 18.44;
+    let flight = tCatch - t0;
+    if (source.includes('ミット音')) flight -= dist / SOUND_SPEED; // 音の到達遅れを補正
+    if (flight < BEHIND_MIN_FLIGHT || flight > BEHIND_MAX_FLIGHT) return;
+
+    const kmh = Math.round((dist / flight) * 3.6 * 10) / 10;
+    if (kmh < 20 || kmh > 200) { state = 'armed'; return; }
+    showResult(kmh, flight, dist, source, tCatch);
   }
 
   // ライン間の領域全体で動体ピクセルの重心X座標を求める
@@ -486,7 +682,10 @@
 
     // 非現実的な値は誤検出として捨てる
     if (kmh < 20 || kmh > 200) { state = 'armed'; return; }
+    showResult(kmh, elapsed, dist, method, t);
+  }
 
+  function showResult(kmh, elapsed, dist, method, t) {
     state = 'cooldown';
     cooldownUntil = t + COOLDOWN;
 
@@ -522,17 +721,35 @@
   function drawOverlay() {
     const w = overlay.width, h = overlay.height;
     octx.clearRect(0, 0, w, h);
+    const active = (state === 'detecting');
+    octx.strokeStyle = active ? 'rgba(255,160,0,0.9)' : 'rgba(127,212,255,0.8)';
+    octx.lineWidth = 3 * devicePixelRatio;
+    octx.setLineDash([14 * devicePixelRatio, 10 * devicePixelRatio]);
 
-    // トリガーライン2本
-    for (const lx of [LINE_A, LINE_B]) {
-      const x = lx * w;
-      octx.strokeStyle = (state === 'detecting') ? 'rgba(255,160,0,0.9)' : 'rgba(127,212,255,0.8)';
-      octx.lineWidth = 3 * devicePixelRatio;
-      octx.setLineDash([14 * devicePixelRatio, 10 * devicePixelRatio]);
-      octx.beginPath();
-      octx.moveTo(x, h * 0.08);
-      octx.lineTo(x, h * 0.92);
-      octx.stroke();
+    if (mode === 'side') {
+      // トリガーライン2本
+      for (const lx of [LINE_A, LINE_B]) {
+        const x = lx * w;
+        octx.beginPath();
+        octx.moveTo(x, h * 0.08);
+        octx.lineTo(x, h * 0.92);
+        octx.stroke();
+      }
+    } else {
+      // 投手を入れる枠
+      octx.strokeRect(PITCH_ZONE.x0 * w, PITCH_ZONE.y0 * h,
+        (PITCH_ZONE.x1 - PITCH_ZONE.x0) * w, (PITCH_ZONE.y1 - PITCH_ZONE.y0) * h);
+      octx.font = `${12 * devicePixelRatio}px sans-serif`;
+      octx.fillStyle = 'rgba(127,212,255,0.9)';
+      octx.fillText('投手をこの枠に', PITCH_ZONE.x0 * w + 8 * devicePixelRatio, PITCH_ZONE.y0 * h - 8 * devicePixelRatio);
+      if (!micReady) {
+        // 映像フォールバック時は捕手エリアも表示
+        octx.strokeStyle = 'rgba(255,213,79,0.7)';
+        octx.strokeRect(CATCH_ZONE.x0 * w, CATCH_ZONE.y0 * h,
+          (CATCH_ZONE.x1 - CATCH_ZONE.x0) * w, (CATCH_ZONE.y1 - CATCH_ZONE.y0) * h);
+        octx.fillStyle = 'rgba(255,213,79,0.9)';
+        octx.fillText('捕手エリア', CATCH_ZONE.x0 * w + 8 * devicePixelRatio, CATCH_ZONE.y0 * h - 8 * devicePixelRatio);
+      }
     }
     octx.setLineDash([]);
 
@@ -540,14 +757,18 @@
     if (state === 'detecting') {
       stateLabel.textContent = '⚾ 計測中…';
       stateLabel.classList.add('detecting');
-      guide.textContent = 'ボールを追跡中!';
+      guide.textContent = (mode === 'side') ? 'ボールを追跡中!'
+        : (micReady ? 'ミットの音を待っています…' : '捕球の動きを待っています…');
     } else if (state === 'cooldown') {
       stateLabel.textContent = '次の投球まで少し待ってね';
       stateLabel.classList.remove('detecting');
     } else {
       stateLabel.textContent = '● READY — 投げてOK!';
       stateLabel.classList.remove('detecting');
-      guide.textContent = '左の線にリリースポイント、右の線に捕る位置を合わせてね';
+      guide.textContent = (mode === 'side')
+        ? '左の線にリリースポイント、右の線に捕る位置を合わせてね'
+        : (micReady ? '投手を枠に入れてかまえてね(捕球はミット音で検出)'
+                    : 'マイクなし:投手を枠に、捕手を黄色エリアに入れてね');
     }
   }
 })();
