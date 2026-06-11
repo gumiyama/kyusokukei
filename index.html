@@ -287,6 +287,8 @@
   const MIN_FLIGHT = 0.08;              // これ以下は誤検出(秒)
   const COOLDOWN = 2.5;                 // 計測後の待ち(秒)
 
+  const MAX_GLOBAL_MOTION = W * H * 0.12; // 画面の12%以上が動いたらカメラ揺れとみなす
+
   let prevFrame = null;
   let state = 'idle';        // idle | armed | detecting | cooldown
   let firstLine = null;      // 'A' or 'B' どちらを先に通ったか
@@ -295,6 +297,7 @@
   let records = [];
   let stream = null;
   let running = false;
+  let samples = [];          // 飛行中の {t, x} サンプル(回帰用)
 
   // ---- 画面遷移 ----
   document.querySelectorAll('.presets button').forEach(b => {
@@ -383,24 +386,33 @@
     if (prevFrame) {
       const motionA = bandMotion(frame, prevFrame, Math.round(W * LINE_A));
       const motionB = bandMotion(frame, prevFrame, Math.round(W * LINE_B));
+      const blob = motionCentroid(frame, prevFrame);
+      const shaking = blob.count > MAX_GLOBAL_MOTION; // カメラ揺れ・全体ノイズ
 
       if (state === 'cooldown' && t >= cooldownUntil) {
         state = 'armed';
       }
 
-      if (state === 'armed') {
+      if (state === 'armed' && !shaking) {
         if (motionA >= MIN_PIXELS && motionB >= MIN_PIXELS) {
           // 両方同時はカメラ揺れなどの全体ノイズ → 無視
         } else if (motionA >= MIN_PIXELS) {
-          state = 'detecting'; firstLine = 'A'; t0 = t;
+          state = 'detecting'; firstLine = 'A'; t0 = t; samples = [];
         } else if (motionB >= MIN_PIXELS) {
-          state = 'detecting'; firstLine = 'B'; t0 = t;
+          state = 'detecting'; firstLine = 'B'; t0 = t; samples = [];
+        }
+        if (state === 'detecting' && blob.count >= MIN_PIXELS) {
+          samples.push({ t, x: blob.cx });
         }
       } else if (state === 'detecting') {
         const elapsed = t - t0;
         if (elapsed > MAX_FLIGHT) {
           state = 'armed';  // タイムアウト → 仕切り直し
         } else {
+          // 飛行中:ボール重心を毎フレーム記録(揺れフレームは除外)
+          if (!shaking && blob.count >= MIN_PIXELS) {
+            samples.push({ t, x: blob.cx });
+          }
           const hit = (firstLine === 'A') ? motionB : motionA;
           if (hit >= MIN_PIXELS && elapsed >= MIN_FLIGHT) {
             onMeasured(elapsed, t);
@@ -410,6 +422,32 @@
     }
     prevFrame = frame;
     drawOverlay();
+  }
+
+  // ライン間の領域全体で動体ピクセルの重心X座標を求める
+  function motionCentroid(cur, prev) {
+    const x0 = Math.round(W * LINE_A), x1 = Math.round(W * LINE_B);
+    let count = 0, sumX = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = (y * W + x) * 4;
+        const lc = cur[i] * 0.3 + cur[i+1] * 0.59 + cur[i+2] * 0.11;
+        const lp = prev[i] * 0.3 + prev[i+1] * 0.59 + prev[i+2] * 0.11;
+        if (Math.abs(lc - lp) > MOTION_THRESH) { count++; sumX += x; }
+      }
+    }
+    return { count, cx: count ? sumX / count : 0 };
+  }
+
+  // x(t) の最小二乗直線フィット → 傾き(px/秒)を返す
+  function fitVelocity(pts) {
+    const n = pts.length;
+    if (n < 4) return null;
+    let st = 0, sx = 0, stt = 0, stx = 0;
+    for (const p of pts) { st += p.t; sx += p.x; stt += p.t * p.t; stx += p.t * p.x; }
+    const denom = n * stt - st * st;
+    if (Math.abs(denom) < 1e-9) return null;
+    return (n * stx - st * sx) / denom;
   }
 
   // 縦ライン付近の帯で、前フレームとの輝度差分が大きいピクセル数を数える
@@ -429,7 +467,22 @@
 
   function onMeasured(elapsed, t) {
     const dist = parseFloat(document.getElementById('distance').value) || 18.44;
-    const kmh = Math.round((dist / elapsed) * 3.6 * 10) / 10;
+
+    // 多点回帰:飛行中のボール重心 x(t) を直線フィットして速度を出す。
+    // 2点(ライン通過時刻)方式よりフレームタイミングのノイズに強い。
+    let kmh = null, method = '';
+    const slope = fitVelocity(samples);           // px/秒(解析キャンバス上)
+    const metersPerPx = dist / (W * (LINE_B - LINE_A)); // ライン間 = 設定距離
+    if (slope !== null) {
+      kmh = Math.abs(slope) * metersPerPx * 3.6;
+      method = `回帰 ${samples.length}点`;
+    }
+    // サンプル不足時は従来の2点方式にフォールバック
+    if (kmh === null || !isFinite(kmh)) {
+      kmh = (dist / elapsed) * 3.6;
+      method = '2点計測';
+    }
+    kmh = Math.round(kmh * 10) / 10;
 
     // 非現実的な値は誤検出として捨てる
     if (kmh < 20 || kmh > 200) { state = 'armed'; return; }
@@ -443,7 +496,7 @@
     document.getElementById('speedValue').textContent = kmh.toFixed(1);
     document.getElementById('speedComment').textContent = comment(kmh);
     document.getElementById('speedSub').textContent =
-      `飛行時間 ${elapsed.toFixed(3)}秒 / ${dist}m`;
+      `飛行時間 ${elapsed.toFixed(3)}秒 / ${dist}m / ${method}`;
     document.getElementById('bestNote').textContent =
       (records.length > 1 && kmh > prevMax) ? '👑 自己ベスト更新!' : '';
     const flash = document.getElementById('speedFlash');
