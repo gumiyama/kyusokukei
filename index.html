@@ -155,6 +155,26 @@
   }
   .session-stats b { color: #ffd54f; }
 
+  #recalBtn {
+    pointer-events: auto;
+    font-size: 0.78rem; padding: 8px 12px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.4); color: #fff;
+  }
+  #devBadge {
+    display: none;
+    position: absolute; top: calc(env(safe-area-inset-top, 0px) + 56px); left: 10px;
+    font-family: monospace; font-size: 0.72rem; color: #7fd4ff;
+    background: rgba(0,0,0,0.45); border-radius: 8px; padding: 5px 10px;
+  }
+  #skipCalBtn {
+    display: none;
+    position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 64px);
+    left: 50%; transform: translateX(-50%);
+    font-size: 0.8rem; padding: 9px 16px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.55); color: #cde;
+    z-index: 5;
+  }
+
   #errMsg {
     position: absolute; inset: 0; display: none;
     align-items: center; justify-content: center; text-align: center;
@@ -231,7 +251,7 @@
         </div>
         <div class="setup-step">
           <div class="num">3</div>
-          <div>画面に表示される<b>2本の点線</b>の間をボールが通ると自動で球速を計測!</div>
+          <div>カメラ起動後、画面上の<b>投手プレート</b>と<b>ホームベース</b>をタップして距離合わせ。あとは投げるだけで自動計測!</div>
         </div>
       </div>
       </div><!-- /sideGuide -->
@@ -301,8 +321,11 @@
     <div class="hud-top">
       <button id="backBtn">← 戻る</button>
       <div id="stateLabel">READY</div>
-      <div style="width:60px"></div>
+      <button id="recalBtn">📐 再調整</button>
     </div>
+
+    <div id="devBadge"></div>
+    <button id="skipCalBtn">タップせずに標準位置で使う</button>
 
     <div class="session-stats" id="sessionStats" style="display:none">
       最速 <b id="maxSpeed">-</b> km/h<br>
@@ -332,14 +355,19 @@
   const stateLabel = document.getElementById('stateLabel');
   const guide = document.getElementById('guide');
 
-  // 解析用の縮小キャンバス(処理を軽くするため低解像度で差分をとる)
-  const W = 160, H = 90;
+  // 解析用の縮小キャンバス(端末性能に応じて解像度を自動調整)
+  let W = 160, H = 90;
   const proc = document.createElement('canvas');
-  proc.width = W; proc.height = H;
   const pctx = proc.getContext('2d', { willReadFrequently: true });
+  function setProcSize(w) {
+    W = w; H = Math.round(w * 9 / 16);
+    proc.width = W; proc.height = H;
+    prevFrame = null; // 解像度が変わったら差分はリセット
+  }
 
-  // トリガーライン位置(解析キャンバス上のX座標、画面比率)
-  const LINE_A = 0.18, LINE_B = 0.82;  // 左線・右線
+  // トリガーライン位置(画面幅に対する比率)。キャリブレーションで上書きされる
+  const DEFAULT_LINE_A = 0.18, DEFAULT_LINE_B = 0.82;
+  let LINE_A = DEFAULT_LINE_A, LINE_B = DEFAULT_LINE_B;
   const BAND = 4;                       // ラインの判定幅(px on proc canvas)
   const MOTION_THRESH = 40;             // ピクセル差分のしきい値
   const MIN_PIXELS = 3;                 // 動体とみなす最小ピクセル数
@@ -347,7 +375,7 @@
   const MIN_FLIGHT = 0.08;              // これ以下は誤検出(秒)
   const COOLDOWN = 2.5;                 // 計測後の待ち(秒)
 
-  const MAX_GLOBAL_MOTION = W * H * 0.12; // 画面の12%以上が動いたらカメラ揺れとみなす
+  const GLOBAL_MOTION_RATIO = 0.12; // 画面の12%以上が動いたらカメラ揺れとみなす
 
   // ---- 後ろから(スカウト)モード用 ----
   const PITCH_ZONE = { x0: 0.35, x1: 0.65, y0: 0.12, y1: 0.60 }; // 投手を入れる枠
@@ -390,6 +418,11 @@
   let stream = null;
   let running = false;
   let samples = [];          // 飛行中の {t, x} サンプル(回帰用)
+  let calPoints = [];        // キャリブレーションでタップした点(画面幅比率)
+  let actualFps = 30;        // カメラの実フレームレート
+  let procTimeEma = 0;       // 1フレームの処理時間EMA(ms)。重い端末では解像度を下げる
+
+  setProcSize(160);
 
   // ---- 画面遷移 ----
   document.querySelectorAll('.presets button').forEach(b => {
@@ -458,7 +491,29 @@
     video.srcObject = stream;
     document.getElementById('startScreen').style.display = 'none';
     document.getElementById('measureScreen').classList.add('active');
-    state = 'armed';
+
+    // 端末能力を検出して、その端末で出せる最高精度に合わせる
+    const track = stream.getVideoTracks()[0];
+    const s = track.getSettings ? track.getSettings() : {};
+    actualFps = s.frameRate || 30;
+    // 高fps端末(最新iPhone等)は解析解像度も上げてサブピクセル精度を稼ぐ
+    setProcSize(actualFps >= 50 ? 240 : 160);
+    procTimeEma = 0;
+    const badge = document.getElementById('devBadge');
+    badge.textContent = `${Math.round(actualFps)}fps・${actualFps >= 50 ? '高精度' : '標準'}`;
+    badge.style.display = 'block';
+
+    // 横からモードは2点キャリブレーションから開始(距離の系統誤差を根治する)
+    if (mode === 'side') {
+      LINE_A = DEFAULT_LINE_A; LINE_B = DEFAULT_LINE_B;
+      calPoints = [];
+      state = 'calibrate';
+    } else {
+      state = 'armed';
+    }
+    document.getElementById('skipCalBtn').style.display = (state === 'calibrate') ? '' : 'none';
+    document.getElementById('recalBtn').style.display = (mode === 'side') ? '' : 'none';
+
     prevFrame = null;
     running = true;
     video.addEventListener('loadedmetadata', () => {
@@ -467,10 +522,45 @@
     }, { once: true });
   }
 
+  // ---- 2点キャリブレーション(横からモード) ----
+  // プレートとベースは規格で距離が決まっている。タップ位置でpx→m換算を確定し、
+  // 「リリースは体の前方で起きる」ことによる距離の系統誤差(最大10%)を根治する。
+  document.getElementById('measureScreen').addEventListener('click', (ev) => {
+    if (mode !== 'side' || state !== 'calibrate') return;
+    if (ev.target.closest('button')) return; // ボタン操作は除外
+    const rect = document.getElementById('measureScreen').getBoundingClientRect();
+    const fx = (ev.clientX - rect.left) / rect.width;
+    calPoints.push(Math.min(0.97, Math.max(0.03, fx)));
+    if (calPoints.length >= 2) finishCalibration(false);
+  });
+
+  document.getElementById('skipCalBtn').addEventListener('click', () => {
+    if (state === 'calibrate') finishCalibration(true);
+  });
+
+  document.getElementById('recalBtn').addEventListener('click', () => {
+    if (mode !== 'side' || !running) return;
+    calPoints = [];
+    state = 'calibrate';
+    document.getElementById('skipCalBtn').style.display = '';
+  });
+
+  function finishCalibration(skipped) {
+    if (!skipped) {
+      const a = Math.min(calPoints[0], calPoints[1]);
+      const b = Math.max(calPoints[0], calPoints[1]);
+      if (b - a < 0.15) { calPoints = []; return; } // 2点が近すぎる→やり直し
+      LINE_A = a; LINE_B = b;
+    }
+    state = 'armed';
+    document.getElementById('skipCalBtn').style.display = 'none';
+  }
+
   // ---- マイク:捕球音(鋭いスパイク)の検出 ----
   function setupAudio(stream) {
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume(); // iOS Safariはユーザー操作後にresume必須
       const src = audioCtx.createMediaStreamSource(stream);
       const proc = audioCtx.createScriptProcessor(1024, 1, 1);
       src.connect(proc);
@@ -543,8 +633,10 @@
   }
 
   function processFrame(t) {
+    const tStart = performance.now();
     pctx.drawImage(video, 0, 0, W, H);
     const frame = pctx.getImageData(0, 0, W, H).data;
+    if (state === 'calibrate') { prevFrame = frame; drawOverlay(); return; }
 
     if (prevFrame && mode === 'behind') {
       processBehind(frame, prevFrame);
@@ -552,7 +644,7 @@
       const motionA = bandMotion(frame, prevFrame, Math.round(W * LINE_A));
       const motionB = bandMotion(frame, prevFrame, Math.round(W * LINE_B));
       const blob = motionCentroid(frame, prevFrame);
-      const shaking = blob.count > MAX_GLOBAL_MOTION; // カメラ揺れ・全体ノイズ
+      const shaking = blob.count > W * H * GLOBAL_MOTION_RATIO; // カメラ揺れ・全体ノイズ
 
       if (state === 'cooldown' && t >= cooldownUntil) {
         state = 'armed';
@@ -587,6 +679,10 @@
     }
     prevFrame = frame;
     drawOverlay();
+
+    // 処理時間を監視し、重い端末では解析解像度を自動で落とす(処理落ち=計測穴を防ぐ)
+    procTimeEma = procTimeEma * 0.9 + (performance.now() - tStart) * 0.1;
+    if (procTimeEma > 8 && W > 160) setProcSize(160);
   }
 
   // ---- 後ろからモード:リリース(腕の振り)→捕球(音 or 映像)で飛行時間を測る ----
@@ -750,13 +846,25 @@
     octx.setLineDash([14 * devicePixelRatio, 10 * devicePixelRatio]);
 
     if (mode === 'side') {
-      // トリガーライン2本
-      for (const lx of [LINE_A, LINE_B]) {
-        const x = lx * w;
-        octx.beginPath();
-        octx.moveTo(x, h * 0.08);
-        octx.lineTo(x, h * 0.92);
-        octx.stroke();
+      if (state === 'calibrate') {
+        // タップ済みの基準点を表示
+        octx.strokeStyle = 'rgba(255,213,79,0.95)';
+        for (const fx of calPoints) {
+          const x = fx * w;
+          octx.beginPath();
+          octx.moveTo(x, h * 0.08);
+          octx.lineTo(x, h * 0.92);
+          octx.stroke();
+        }
+      } else {
+        // トリガーライン2本
+        for (const lx of [LINE_A, LINE_B]) {
+          const x = lx * w;
+          octx.beginPath();
+          octx.moveTo(x, h * 0.08);
+          octx.lineTo(x, h * 0.92);
+          octx.stroke();
+        }
       }
     } else {
       // 投手を入れる枠
@@ -777,7 +885,13 @@
     octx.setLineDash([]);
 
     // 状態表示
-    if (state === 'detecting') {
+    if (state === 'calibrate') {
+      stateLabel.textContent = '📐 基準点の設定';
+      stateLabel.classList.remove('detecting');
+      guide.textContent = (calPoints.length === 0)
+        ? '① 投手のプレート(足元)を画面上でタップ'
+        : '② ホームベース(捕手の足元)をタップ';
+    } else if (state === 'detecting') {
       stateLabel.textContent = '⚾ 計測中…';
       stateLabel.classList.add('detecting');
       guide.textContent = (mode === 'side') ? 'ボールを追跡中!'
@@ -789,7 +903,7 @@
       stateLabel.textContent = '● READY — 投げてOK!';
       stateLabel.classList.remove('detecting');
       guide.textContent = (mode === 'side')
-        ? '左の線にリリースポイント、右の線に捕る位置を合わせてね'
+        ? '基準線の間をボールが通ると自動で計測するよ'
         : (micReady ? '投手を枠に入れてかまえてね(捕球はミット音で検出)'
                     : 'マイクなし:投手を枠に、捕手を黄色エリアに入れてね');
     }
