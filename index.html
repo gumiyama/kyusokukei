@@ -143,6 +143,9 @@
     line-height: 1;
   }
   #speedFlash .unit { font-size: 1.4rem; color: #ff8080; letter-spacing: 0.3em; margin-top: 4px; }
+  #speedFlash .ci { font-size: 0.9rem; color: #9bb; letter-spacing: 0.05em; margin-left: 8px; }
+  #speedFlash.lowconf .speed { color: #ffb74d; text-shadow: 0 0 30px rgba(255,183,77,0.6); }
+  #speedFlash.lowconf .unit { color: #ffcc80; }
   #speedFlash .comment { margin-top: 14px; font-size: 1.2rem; color: #7fd4ff; }
   #speedFlash .sub { margin-top: 8px; font-size: 0.8rem; color: #99a; font-family: monospace; }
   #speedFlash .best-note { margin-top: 10px; font-size: 1rem; color: #ffd54f; }
@@ -338,7 +341,7 @@
 
     <div id="speedFlash">
       <div class="speed" id="speedValue">---</div>
-      <div class="unit">km/h</div>
+      <div class="unit">km/h<span id="ciValue" class="ci"></span></div>
       <div class="comment" id="speedComment"></div>
       <div class="sub" id="speedSub"></div>
       <div class="best-note" id="bestNote"></div>
@@ -659,7 +662,7 @@
           state = 'detecting'; firstLine = 'B'; t0 = t; samples = [];
         }
         if (state === 'detecting' && blob.count >= MIN_PIXELS) {
-          samples.push({ t, x: blob.cx });
+          samples.push({ t, x: blob.cx, w: blob.count });
         }
       } else if (state === 'detecting') {
         const elapsed = t - t0;
@@ -668,7 +671,7 @@
         } else {
           // 飛行中:ボール重心を毎フレーム記録(揺れフレームは除外)
           if (!shaking && blob.count >= MIN_PIXELS) {
-            samples.push({ t, x: blob.cx });
+            samples.push({ t, x: blob.cx, w: blob.count });
           }
           const hit = (firstLine === 'A') ? motionB : motionA;
           if (hit >= MIN_PIXELS && elapsed >= MIN_FLIGHT) {
@@ -733,7 +736,8 @@
 
     const kmh = Math.round((dist / flight) * 3.6 * 10) / 10;
     if (kmh < 20 || kmh > 200) { state = 'armed'; return; }
-    showResult(kmh, flight, dist, source, tCatch);
+    // 後ろからモードは単一時間差なので信頼区間は出せない。映像フォールバックは低信頼扱い
+    showResult(kmh, flight, dist, source, tCatch, null, source.includes('映像'));
   }
 
   // ライン間の領域全体で動体ピクセルの重心X座標を求める
@@ -751,15 +755,52 @@
     return { count, cx: count ? sumX / count : 0 };
   }
 
-  // x(t) の最小二乗直線フィット → 傾き(px/秒)を返す
-  function fitVelocity(pts) {
-    const n = pts.length;
-    if (n < 4) return null;
-    let st = 0, sx = 0, stt = 0, stx = 0;
-    for (const p of pts) { st += p.t; sx += p.x; stt += p.t * p.t; stx += p.t * p.x; }
-    const denom = n * stt - st * st;
+  // 重み付き最小二乗で x(t) を直線フィット。重み = ボールのブロブ画素数(大きく写った
+  // フレームほど重心が信頼できる)。傾き(px/秒)・切片・傾きの標準誤差を返す。
+  function weightedLSQ(pts) {
+    let sw = 0, swt = 0, swx = 0, swtt = 0, swtx = 0;
+    for (const p of pts) {
+      const w = p.w || 1;
+      sw += w; swt += w * p.t; swx += w * p.x; swtt += w * p.t * p.t; swtx += w * p.t * p.x;
+    }
+    const denom = sw * swtt - swt * swt;
     if (Math.abs(denom) < 1e-9) return null;
-    return (n * stx - st * sx) / denom;
+    const slope = (sw * swtx - swt * swx) / denom;
+    const intercept = (swx - slope * swt) / sw;
+    // 傾きの標準誤差(残差ばらつき÷時間の広がり)→ 信頼区間の元
+    const n = pts.length;
+    let ssr = 0, tbar = swt / sw, stt = 0;
+    for (const p of pts) {
+      const r = p.x - (slope * p.t + intercept);
+      ssr += r * r;
+      stt += (p.t - tbar) * (p.t - tbar);
+    }
+    const slopeSE = (n > 2 && stt > 0) ? Math.sqrt((ssr / (n - 2)) / stt) : 0;
+    return { slope, intercept, slopeSE, n };
+  }
+
+  // RANSAC でロバストに直線フィット。鳥・人・二重ブロブなど外れ値サンプルを排除し、
+  // 最多インライアの直線を重み付き最小二乗で精密化する。
+  function robustFitVelocity(pts) {
+    const n = pts.length;
+    if (n < 4) return weightedLSQ(pts);
+    const TOL = Math.max(1.0, W * 0.008); // インライア許容残差(px)
+    let bestInliers = null;
+    const iters = Math.min(80, n * (n - 1));
+    for (let it = 0; it < iters; it++) {
+      const i = Math.floor(Math.random() * n);
+      let j = Math.floor(Math.random() * n);
+      if (i === j) j = (j + 1) % n;
+      const dt = pts[j].t - pts[i].t;
+      if (Math.abs(dt) < 1e-4) continue;
+      const m = (pts[j].x - pts[i].x) / dt;
+      const b = pts[i].x - m * pts[i].t;
+      const inl = [];
+      for (const p of pts) if (Math.abs(p.x - (m * p.t + b)) <= TOL) inl.push(p);
+      if (!bestInliers || inl.length > bestInliers.length) bestInliers = inl;
+    }
+    if (!bestInliers || bestInliers.length < 4) return weightedLSQ(pts);
+    return weightedLSQ(bestInliers);
   }
 
   // 縦ライン付近の帯で、前フレームとの輝度差分が大きいピクセル数を数える
@@ -779,44 +820,56 @@
 
   function onMeasured(elapsed, t) {
     const dist = parseFloat(document.getElementById('distance').value) || 18.44;
-
-    // 多点回帰:飛行中のボール重心 x(t) を直線フィットして速度を出す。
-    // 2点(ライン通過時刻)方式よりフレームタイミングのノイズに強い。
-    let kmh = null, method = '';
-    const slope = fitVelocity(samples);           // px/秒(解析キャンバス上)
     const metersPerPx = dist / (W * (LINE_B - LINE_A)); // ライン間 = 設定距離
-    if (slope !== null) {
-      kmh = Math.abs(slope) * metersPerPx * 3.6;
-      method = `回帰 ${samples.length}点`;
+    const mps = metersPerPx * 3.6;
+
+    // ロバスト多点回帰:外れ値を排除し、重み付き最小二乗で x(t) の傾きを推定。
+    let kmh = null, method = '', ci = null, lowConf = false;
+    const fit = robustFitVelocity(samples);
+    if (fit && isFinite(fit.slope)) {
+      kmh = Math.abs(fit.slope) * mps;
+      ci = 1.96 * fit.slopeSE * mps;        // 95%信頼区間(±km/h)
+      method = `回帰 ${fit.n}点`;
+      // 品質ゲート:インライアが少ない/ばらつきが大きいと低信頼として警告
+      lowConf = (fit.n < 6) || (ci > 8);
     }
     // サンプル不足時は従来の2点方式にフォールバック
     if (kmh === null || !isFinite(kmh)) {
       kmh = (dist / elapsed) * 3.6;
       method = '2点計測';
+      lowConf = true;
     }
     kmh = Math.round(kmh * 10) / 10;
 
     // 非現実的な値は誤検出として捨てる
     if (kmh < 20 || kmh > 200) { state = 'armed'; return; }
-    showResult(kmh, elapsed, dist, method, t);
+    showResult(kmh, elapsed, dist, method, t, ci, lowConf);
   }
 
-  function showResult(kmh, elapsed, dist, method, t) {
+  function showResult(kmh, elapsed, dist, method, t, ci, lowConf) {
     state = 'cooldown';
     cooldownUntil = t + COOLDOWN;
 
     // 区間平均速度→リリース初速に換算(スタジアム表示と同じ基準にする)
-    const v0 = Math.round(toInitialSpeed(kmh, dist) * 10) / 10;
+    const convF = toInitialSpeed(kmh, dist) / kmh; // 線形換算係数
+    const v0 = Math.round(kmh * convF * 10) / 10;
+    const v0ci = (ci != null && isFinite(ci)) ? ci * convF : null; // 信頼区間も同じ係数で伝播
 
     const prevMax = records.length ? Math.max(...records) : 0;
     records.push(v0);
 
+    // 信頼区間を併記(盛らない設計=公器の条件)。低信頼の球は警告を出す
+    const ciText = (v0ci != null) ? ` ±${v0ci.toFixed(1)}` : '';
     document.getElementById('speedValue').textContent = v0.toFixed(1);
-    document.getElementById('speedComment').textContent = comment(v0);
+    const speedFlash = document.getElementById('speedFlash');
+    speedFlash.classList.toggle('lowconf', !!lowConf);
+    document.getElementById('ciValue').textContent = ciText ? ciText + ' km/h' : '';
+    document.getElementById('speedComment').textContent =
+      lowConf ? '⚠️ 計測の信頼度が低めです(撮り直し推奨)' : comment(v0);
     document.getElementById('speedSub').textContent =
       `初速換算 / 平均 ${kmh.toFixed(1)}km/h / 飛行 ${elapsed.toFixed(3)}秒 / ${dist}m / ${method}`;
     document.getElementById('bestNote').textContent =
-      (records.length > 1 && v0 > prevMax) ? '👑 自己ベスト更新!' : '';
+      (records.length > 1 && v0 > prevMax && !lowConf) ? '👑 自己ベスト更新!' : '';
     const flash = document.getElementById('speedFlash');
     flash.classList.add('show');
     setTimeout(() => flash.classList.remove('show'), 2300);
