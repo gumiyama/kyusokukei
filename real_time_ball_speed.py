@@ -6,8 +6,11 @@ import math
 from typing import Optional, Tuple, List
 
 from personal_record import update_personal_record
-
-from ball_speed_calculator import calculate_speed, calculate_spin_rpm
+from ball_speed_calculator import (
+    calculate_speed,
+    calculate_spin_rpm,
+    estimate_speed_from_trajectory,
+)
 
 
 def track_ball_speed(
@@ -24,25 +27,9 @@ def track_ball_speed(
 ) -> None:
     """Track ball speed in real time using a webcam.
 
-    This function uses simple color detection to track a ball as it crosses two
-    vertical lines on the video feed. The time between crossings is measured and
-    converted to speed using :func:`calculate_speed`.
-
-    Args:
-        known_distance_meters: Distance in meters between the two on-screen
-            lines the ball must travel through.
-        hsv_lower: Lower HSV color threshold for the ball.
-        hsv_upper: Upper HSV color threshold for the ball.
-        camera_index: Index of the camera to use.
-        line_positions: Tuple with the relative x-positions (0-1) of the start
-            and end lines on the frame.
-        save_path: Optional path to save the video evidence. If provided,
-            all frames are written to this file.
-        player_name: Optional player name used for personal record keeping.
-        record_file: File path used to store personal records.
-        marker_lower: Optional lower HSV threshold for a marker on the ball used
-            to compute spin rate.
-        marker_upper: Optional upper HSV threshold for the marker.
+    Phase 1 records every detected ball center through the measurement region
+    and estimates speed with least-squares trajectory fitting. The legacy
+    two-crossing method remains as a fallback if too few valid samples exist.
     """
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
@@ -51,14 +38,16 @@ def track_ball_speed(
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        fps = 30.0  # Fallback if FPS cannot be determined
+        fps = 30.0
 
     writer = None
-
     start_frame = None
     end_frame = None
     frame_count = 0
     angles: List[float] = []
+    trajectory: List[Tuple[int, float]] = []
+    line1_x = None
+    line2_x = None
 
     while True:
         ret, frame = cap.read()
@@ -100,12 +89,22 @@ def track_ball_speed(
         cv2.line(frame, (line2_x, 0), (line2_x, frame.shape[0]), (0, 0, 255), 2)
 
         if center:
+            # Keep all observations from a small margin before the first line to
+            # a small margin after the second line. Regression can therefore use
+            # substantially more information than just two crossing frames.
+            margin = int(abs(line2_x - line1_x) * 0.05)
+            if line1_x - margin <= center[0] <= line2_x + margin:
+                trajectory.append((frame_count, float(center[0])))
+
             if start_frame is None and center[0] >= line1_x:
                 start_frame = frame_count
             elif start_frame is not None and end_frame is None and center[0] >= line2_x:
                 end_frame = frame_count
+
             if start_frame is not None and end_frame is None and marker_center is not None:
-                angle = math.degrees(math.atan2(marker_center[1]-center[1], marker_center[0]-center[0]))
+                angle = math.degrees(
+                    math.atan2(marker_center[1] - center[1], marker_center[0] - center[0])
+                )
                 angles.append(angle)
 
         if writer is not None:
@@ -113,7 +112,7 @@ def track_ball_speed(
 
         cv2.imshow("Real-Time Ball Speed", frame)
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC
+        if key == 27:
             break
         if start_frame is not None and end_frame is not None:
             break
@@ -123,15 +122,33 @@ def track_ball_speed(
         writer.release()
     cv2.destroyAllWindows()
 
-    if start_frame is not None and end_frame is not None:
-        result = calculate_speed(start_frame, end_frame, fps, known_distance_meters)
-        print(f"Speed: {result['mps']:.2f} m/s ({result['kmh']:.2f} km/h)")
+    if start_frame is not None and end_frame is not None and line1_x is not None and line2_x is not None:
+        if len(trajectory) >= 3:
+            result = estimate_speed_from_trajectory(
+                trajectory,
+                fps,
+                line1_x,
+                line2_x,
+                known_distance_meters,
+            )
+            print(
+                f"Speed: {result['mps']:.2f} m/s ({result['kmh']:.2f} km/h) "
+                f"[trajectory n={result['sample_count']}, R2={result['r2']:.4f}]"
+            )
+        else:
+            result = calculate_speed(start_frame, end_frame, fps, known_distance_meters)
+            print(
+                f"Speed: {result['mps']:.2f} m/s ({result['kmh']:.2f} km/h) "
+                "[two-frame fallback]"
+            )
+
         if angles:
             duration = (end_frame - start_frame) / fps
             rpm = calculate_spin_rpm(angles, duration)
             print(f"Spin: {rpm:.2f} rpm")
+
         if player_name:
-            best, is_new = update_personal_record(player_name, result['kmh'], record_file)
+            best, is_new = update_personal_record(player_name, result["kmh"], record_file)
             if is_new:
                 print(f"New personal best for {player_name}: {best:.2f} km/h")
             else:
@@ -148,30 +165,15 @@ if __name__ == "__main__":
         default=18.44,
         help="Known distance in meters between the two on-screen lines",
     )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Optional path to save the recorded video for evidence",
-    )
-    parser.add_argument(
-        "--player",
-        type=str,
-        default=None,
-        help="Name for personal record keeping",
-    )
+    parser.add_argument("--output", type=str, default=None, help="Optional path to save video")
+    parser.add_argument("--player", type=str, default=None, help="Name for personal records")
     parser.add_argument(
         "--record-file",
         type=str,
         default="personal_records.json",
         help="File path to store personal records",
     )
-    parser.add_argument(
-        "--camera",
-        type=int,
-        default=0,
-        help="Camera index to use",
-    )
+    parser.add_argument("--camera", type=int, default=0, help="Camera index to use")
     parser.add_argument(
         "--marker-lower",
         type=str,
