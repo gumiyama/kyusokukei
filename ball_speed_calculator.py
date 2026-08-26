@@ -1,50 +1,21 @@
 """
-A Python script to calculate the speed of an object (e.g., a ball)
-based on video frame analysis.
+Ball speed calculation utilities.
 
-This script provides a function `calculate_speed` that takes the start frame,
-end frame, video frames per second (FPS), and a known distance the object
-traveled to compute its speed in meters per second (m/s) and
-kilometers per hour (km/h).
-
-The script also includes an example usage section to demonstrate how to use
-the `calculate_speed` function and how it handles potential errors.
+Phase 1 adds trajectory-based speed estimation so that speed can be inferred
+from many tracked video frames instead of only two integer frame crossings.
 """
 
+from typing import Iterable, Sequence, Tuple
+
+
 def calculate_speed(start_frame: int, end_frame: int, video_fps: float, known_distance_meters: float) -> dict:
-    """
-    Calculates the speed of an object (e.g., a ball) based on frame data and known distance.
-
-    Key Assumptions:
-    - The user can accurately identify the `start_frame` and `end_frame` where the
-      object is at the beginning and end of the `known_distance_meters` segment.
-    - The `known_distance_meters` is accurate for the path traveled by the object
-      between these frames.
-    - The object's speed is relatively constant over the measured segment for this
-      calculation to represent an average speed.
-    - The `video_fps` is constant and accurately known.
-
-    Args:
-        start_frame (int): The frame number where the object is at the beginning
-                           of the measured distance.
-        end_frame (int): The frame number where the object is at the end
-                         of the measured distance.
-        video_fps (float): The frames per second of the video.
-        known_distance_meters (float): The known distance the object traveled
-                                       in meters between the start_frame and end_frame.
-
-    Returns:
-        dict: A dictionary containing the calculated speed in meters per second
-              (key: "mps") and kilometers per hour (key: "kmh").
-
-    Raises:
-        ValueError: If video_fps is not greater than 0 or
-                    if start_frame is not less than end_frame.
-    """
+    """Calculate average speed from two frame indices and a known distance."""
     if video_fps <= 0:
         raise ValueError("video_fps must be greater than 0")
     if start_frame >= end_frame:
         raise ValueError("start_frame must be less than end_frame")
+    if known_distance_meters <= 0:
+        raise ValueError("known_distance_meters must be greater than 0")
 
     time_seconds = (end_frame - start_frame) / video_fps
     speed_mps = known_distance_meters / time_seconds
@@ -53,25 +24,75 @@ def calculate_speed(start_frame: int, end_frame: int, video_fps: float, known_di
     return {"mps": speed_mps, "kmh": speed_kmh}
 
 
-def calculate_spin_rpm(angles_deg: list[float], time_seconds: float) -> float:
-    """Calculate spin rate in RPM from a sequence of orientation angles.
+def estimate_speed_from_trajectory(
+    samples: Sequence[Tuple[int, float]],
+    video_fps: float,
+    line1_x: float,
+    line2_x: float,
+    known_distance_meters: float,
+) -> dict:
+    """Estimate ball speed from all tracked positions using linear regression.
 
-    The angle list represents the orientation of a marker on the ball in degrees
-    for each video frame. The function unwraps the angles to determine the total
-    amount of rotation and converts that to revolutions per minute.
+    ``samples`` contains ``(frame_number, x_pixel)`` observations. The physical
+    scale is inferred from the known real-world distance between ``line1_x`` and
+    ``line2_x``. A least-squares fit estimates pixel velocity from every sample,
+    reducing sensitivity to one-frame crossing errors.
 
-    Args:
-        angles_deg: Sequence of marker angles in degrees.
-        time_seconds: Duration covered by ``angles_deg`` in seconds.
-
-    Returns:
-        The spin rate in rotations per minute (RPM).
-
-    Raises:
-        ValueError: If ``time_seconds`` is not greater than 0 or fewer than two
-            angles are provided.
+    Returns ``mps``, ``kmh``, ``r2``, ``sample_count`` and ``px_per_second``.
+    ``r2`` is useful as a basic confidence signal: values near 1 indicate a very
+    consistent trajectory over the measured segment.
     """
+    if video_fps <= 0:
+        raise ValueError("video_fps must be greater than 0")
+    if known_distance_meters <= 0:
+        raise ValueError("known_distance_meters must be greater than 0")
+    if line1_x == line2_x:
+        raise ValueError("line positions must be different")
+    if len(samples) < 3:
+        raise ValueError("at least three trajectory samples are required")
 
+    ordered = sorted(samples, key=lambda item: item[0])
+    frames = [float(frame) for frame, _ in ordered]
+    xs = [float(x) for _, x in ordered]
+
+    if len(set(frames)) != len(frames):
+        raise ValueError("trajectory samples must have unique frame numbers")
+
+    # Convert frame indices to seconds relative to the first observation. Using
+    # relative times improves numerical conditioning for large frame numbers.
+    first_frame = frames[0]
+    times = [(frame - first_frame) / video_fps for frame in frames]
+
+    mean_t = sum(times) / len(times)
+    mean_x = sum(xs) / len(xs)
+    denominator = sum((t - mean_t) ** 2 for t in times)
+    if denominator == 0:
+        raise ValueError("trajectory samples must span multiple frames")
+
+    slope_px_per_second = sum(
+        (t - mean_t) * (x - mean_x) for t, x in zip(times, xs)
+    ) / denominator
+    intercept = mean_x - slope_px_per_second * mean_t
+
+    predicted = [intercept + slope_px_per_second * t for t in times]
+    ss_res = sum((x - pred) ** 2 for x, pred in zip(xs, predicted))
+    ss_tot = sum((x - mean_x) ** 2 for x in xs)
+    r2 = 1.0 if ss_tot == 0 and ss_res == 0 else (0.0 if ss_tot == 0 else 1.0 - ss_res / ss_tot)
+
+    meters_per_pixel = known_distance_meters / abs(line2_x - line1_x)
+    speed_mps = abs(slope_px_per_second) * meters_per_pixel
+
+    return {
+        "mps": speed_mps,
+        "kmh": speed_mps * 3.6,
+        "r2": r2,
+        "sample_count": len(samples),
+        "px_per_second": slope_px_per_second,
+    }
+
+
+def calculate_spin_rpm(angles_deg: list[float], time_seconds: float) -> float:
+    """Calculate spin rate in RPM from a sequence of orientation angles."""
     if time_seconds <= 0:
         raise ValueError("time_seconds must be greater than 0")
     if len(angles_deg) < 2:
@@ -81,7 +102,6 @@ def calculate_spin_rpm(angles_deg: list[float], time_seconds: float) -> float:
     prev = angles_deg[0]
     for angle in angles_deg[1:]:
         delta = angle - prev
-        # unwrap to [-180, 180]
         if delta > 180:
             delta -= 360
         elif delta < -180:
@@ -90,56 +110,9 @@ def calculate_spin_rpm(angles_deg: list[float], time_seconds: float) -> float:
         prev = angle
 
     rotations = abs(total_change) / 360.0
-    rpm = rotations / time_seconds * 60.0
-    return rpm
+    return rotations / time_seconds * 60.0
+
 
 if __name__ == "__main__":
-    # Example usage
-    start_frame_example = 10
-    end_frame_example = 40
-    video_fps_example = 60
-    known_distance_meters_example = 18.44  # Example: Baseball pitch distance
-
-    try:
-        speeds = calculate_speed(
-            start_frame_example,
-            end_frame_example,
-            video_fps_example,
-            known_distance_meters_example
-        )
-        print("Ball Speed Calculation:")
-        print(f"  Frames: {start_frame_example} to {end_frame_example}")
-        print(f"  Video FPS: {video_fps_example}")
-        print(f"  Distance: {known_distance_meters_example} meters")
-        print("-" * 30)
-        print(f"  Speed: {speeds['mps']:.2f} m/s")
-        print(f"  Speed: {speeds['kmh']:.2f} km/h")
-    except ValueError as e:
-        print(f"Error: {e}")
-
-    # Example with invalid input to demonstrate error handling
-    print("\nExample with invalid input (start_frame > end_frame):")
-    try:
-        speeds_error = calculate_speed(
-            50, # start_frame
-            20, # end_frame
-            30, # video_fps
-            10.0 # known_distance_meters
-        )
-        print(f"  Speed: {speeds_error['mps']:.2f} m/s")
-        print(f"  Speed: {speeds_error['kmh']:.2f} km/h")
-    except ValueError as e:
-        print(f"Error: {e}")
-
-    print("\nExample with invalid input (video_fps <= 0):")
-    try:
-        speeds_error_fps = calculate_speed(
-            10, # start_frame
-            20, # end_frame
-            0,  # video_fps
-            10.0 # known_distance_meters
-        )
-        print(f"  Speed: {speeds_error_fps['mps']:.2f} m/s")
-        print(f"  Speed: {speeds_error_fps['kmh']:.2f} km/h")
-    except ValueError as e:
-        print(f"Error: {e}")
+    speeds = calculate_speed(10, 40, 60.0, 18.44)
+    print(f"Speed: {speeds['mps']:.2f} m/s ({speeds['kmh']:.2f} km/h)")
